@@ -3,7 +3,7 @@ name: Terraform Deploy Changes
 on:
   push:
     branches:
-      - feature/terraform_deployment
+      - main
   workflow_dispatch:
     # TODO: add an ability to run only refresh and run with different TF_LOG variable
     # inputs:
