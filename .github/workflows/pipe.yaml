@@ -1,0 +1,58 @@
+name: Terraform Deploy Changes
+
+on:
+  push:
+    branches:
+      - feature/terraform_deployment
+  workflow_dispatch:
+    # TODO: add an ability to run only refresh and run with different TF_LOG variable
+    # inputs:
+    #   logLevel:
+    #     description: 'auto-refresh'     
+    #     required: true
+
+jobs:
+  get_changes:
+    name: Get List of Changed Files with .tf extention
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Prepare variables
+        run: |
+          set -x
+          export FILES_LIST_FULL=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '.tf$')
+          export DIRS_LIST_FULL=$(for file in $(echo ${FILES_LIST_FULL}); do dirname ${file}; done | sort -u)
+          
+          export DIRS_LIST_ENV=$(echo ${DIRS_LIST_FULL} | egrep 'toolset|development|preprod|production')
+          export DIRS_LIST_ENV_JSON=$(echo ${DIRS_LIST_SHARED} | jq -cnR '{env: [inputs | select(length>0)]}')
+
+          export DIRS_LIST_SHARED=$(echo ${DIRS_LIST_FULL} | egrep -v 'toolset|development|preprod|production')
+          export DIRS_LIST_SHARED_JSON=$(echo ${DIRS_LIST_SHARED} | jq -cnR '{shared: [inputs | select(length>0)]}')
+        
+          echo "::set-output name=matrix::$(echo $DIRS_LIST_SHARED | jq -cnR '[inputs | select(length>0)]')"
+
+      - id: set-matrix
+        run: echo "::set-output name=matrix::$(jq -n --argjson shared ${DIRS_LIST_SHARED_JSON} --argjson env ${DIRS_LIST_ENV_JSON} '$shared + $env')"
+
+  terrascan:
+    runs-on: ubuntu-20.04
+    name: terrascan-action
+    timeout-minutes: 5
+    strategy:
+      matrix: ${{fromJson(needs.job1.outputs.matrix)}}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Terrascan terraform ${{ matrix.iac_dir }}
+        uses: accurics/terrascan-action@v1.4.1
+        with:
+          iac_type: 'terraform'
+          iac_version: 'v14'
+          policy_type: 'all'
+          iac_dir: ${{ matrix.iac_dir }}
+          non_recursive: false
+          verbose: true
