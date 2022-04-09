@@ -17,11 +17,13 @@ jobs:
     name: Get List of Changed Files with .tf extention
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      empty_matrix: ${{ steps.check-matrix.outputs.empty_matrix }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
       - name: Prepare variables
+        id: set-matrix
         run: |
           set -x
           export FILES_LIST_FULL=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '.tf$')
@@ -33,27 +35,43 @@ jobs:
           export DIRS_LIST_SHARED=$(echo ${DIRS_LIST_FULL} | egrep -v 'toolset|development|preprod|production')
           export DIRS_LIST_SHARED_JSON=$(echo ${DIRS_LIST_SHARED} | jq -cnR '{shared: [inputs | select(length>0)]}')
         
-          echo "::set-output name=matrix::$(echo $DIRS_LIST_SHARED | jq -cnR '[inputs | select(length>0)]')"
+          
+          export DIRS_LIST_SHARED_JSON="{\"shared\":[\"terraform/base/ecr\",\"terraform/base/eks\",\"terraform/base/vpc\"]}"
+          export DIRS_LIST_ENV_JSON="{\"env\":[\"terraform/base/ecr\",\"terraform/base/eks\",\"terraform/base/github_runner\"]}"
 
-      - id: set-matrix
-        run: echo "::set-output name=matrix::$(jq -n --argjson shared ${DIRS_LIST_SHARED_JSON} --argjson env ${DIRS_LIST_ENV_JSON} '$shared + $env')"
+          echo "::set-output name=matrix::$(jq -c -n --argjson shared ${DIRS_LIST_SHARED_JSON} --argjson env ${DIRS_LIST_ENV_JSON} '$shared + $env')"
+
+      - name: Check changes
+        id: check-matrix
+        run: |
+          # TODO mark empty_matrix to true if there are no changes and consequent steps should be passed
+          echo "::set-output name=empty_matrix::false"
+
+  # job-b:
+  #   runs-on: ubuntu-latest
+  #   needs: get_changes
+  #   steps:
+  #     - run: echo ${{ needs.get_changes.outputs.matrix }}
+
 
   terrascan:
+    if: ${{ needs.get_changes.outputs.empty_matrix == 'false' }}
     runs-on: ubuntu-20.04
+    needs: get_changes
     name: terrascan-action
     timeout-minutes: 5
     strategy:
-      matrix: ${{fromJson(needs.job1.outputs.matrix)}}
+      matrix: ${{ fromJson(needs.get_changes.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
-      - name: Terrascan terraform ${{ matrix.iac_dir }}
+      - name: Terrascan terraform ${{ matrix.env }}
         uses: accurics/terrascan-action@v1.4.1
         with:
           iac_type: 'terraform'
           iac_version: 'v14'
           policy_type: 'all'
-          iac_dir: ${{ matrix.iac_dir }}
+          iac_dir: ${{ matrix.env }}
           non_recursive: false
           verbose: true
